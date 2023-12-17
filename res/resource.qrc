@@ -1,0 +1,8 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+    <qresource prefix="resource">
+        <file>lock_icon.svg</file>
+        <file>lock_clicked_icon.svg</file>
+        <file>fonts/ttf/JetBrainsMono-Light.ttf</file>
+    </qresource>
+</RCC>
