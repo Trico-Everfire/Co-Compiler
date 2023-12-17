@@ -7,3 +7,4 @@ A QT standalone map compiler window. It allows you to syncronously call processe
 - Allow for search in console asserts that can warn you or terminate the process list if a match is found.
 
 It's not perfect yet. I want to add a small custom scripting language that allows you to perform asserts more easily and write custom messages for them, write things to a file like the console's output or the total process runtime. I hope to write up documentation for this application, but I've never been good at it. If asked I can explain how stuff works, but taking everything it can do and putting it into a cohesively written document... It scares me. Another thing I'd like to add is the ability to export to a hammer config in case you wanna get back to hammer. (The custom functionality obviously wouldn't work)
+![image](https://github.com/Trico-Everfire/Co-Compiler/assets/55441008/0943e86d-2ea0-4ae5-b044-bf44b5f78f16)
