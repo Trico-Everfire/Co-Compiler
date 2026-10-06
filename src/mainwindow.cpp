@@ -1,11 +1,11 @@
 #include "mainwindow.h"
 #include "widgets/processlistwidgetitem.h"
 #include "widgets/console.h"
-#include "KeyValue.h"
 #include "confighandler.h"
 #include "enums.h"
 #include "widgets/variableinputdialog.h"
 #include "widgets/luasyntaxhighlighting.h"
+#include "widgets/qwcfiledialog.h"
 #define SOL_ALL_SAFETIES_ON 1
 #include <sol/sol.hpp>
 #include <QDockWidget>
@@ -37,10 +37,11 @@
 #include <QCheckBox>
 #include <QSystemTrayIcon>
 #include <QButtonGroup>
-#include <variant>
-#include <any>
+#include <filesystem>
 
-constexpr auto CONFIG_SAVE_FILTER = "Configuration File (cmdseq.wc cconfig.json);;Hammer Config (cmdseq.wc);;Cocompiler Config (cconfig.json);;All files (*.*)";
+constexpr auto CONFIG_LOAD_FILTER = "Configuration File (cmdseq.wc cconfig.json);;Hammer Config (cmdseq.wc);;Cocompiler Config (cconfig.json);;All files (*.*)";
+constexpr auto CONFIG_SAVE_FILTER = "Configuration File (cmdseq.wc cconfig.json);;Hammer Config (cmdseq.wc);;Cocompiler Config (cconfig.json)";
+
 
 CMainWindow::CMainWindow() : QMainWindow(nullptr)
 {
@@ -172,6 +173,7 @@ CMainWindow::CMainWindow() : QMainWindow(nullptr)
 
 
     connect(loadConfigAction, &QAction::triggered, this, &CMainWindow::LoadConfigurationFromFile);
+    connect(exportConfigAction, &QAction::triggered, this, &CMainWindow::ExportConfigurationToFile);
     connect(pCloseButton, &QPushButton::clicked, this, &CMainWindow::close);
     connect(pEditVariablesAction, &QAction::triggered, this, &CMainWindow::EditVariables);
     connect(pConsoleTextColorAction, &QAction::triggered, this, &CMainWindow::ChangeConsoleTextColor);
@@ -254,9 +256,9 @@ void CMainWindow::fillConfigurations(const QJsonDocument &doc) {
     emit pConfigurationComboBox->currentTextChanged(pConfigurationComboBox->currentText());
 }
 
-void CMainWindow::SaveConfig() {
 
-    QJsonDocument file;
+void CMainWindow::emitConfigurations(QJsonDocument &doc) {
+
     QJsonObject fileObject;
 
     QJsonObject configObject;
@@ -298,7 +300,13 @@ void CMainWindow::SaveConfig() {
 
     fileObject.insert("variables", variables);
 
-    file.setObject(fileObject);
+    doc.setObject(fileObject);
+}
+
+void CMainWindow::SaveConfig() {
+
+    QJsonDocument file;
+    emitConfigurations(file);
     auto jsonFile = QFile(QDir::currentPath() + "/cconfig.json");
     jsonFile.open(QFile::WriteOnly);
     jsonFile.write(file.toJson());
@@ -328,6 +336,7 @@ void CMainWindow::closeEvent(QCloseEvent *event)
     }
 }
 
+//FIXME: this should not crash the cocompiler window itself.
 void CMainWindow::runProcessQueue()
 {
 
@@ -345,14 +354,6 @@ void CMainWindow::runProcessQueue()
 
     QRegularExpression reg(R"(\s+(?=([^"]*"[^"]*")*[^"]*$))",QRegularExpression::PatternOptions::enum_type::ExtendedPatternSyntaxOption);
 
-    if(command->getSpecial() != SPECIAL_EXEC)
-    {
-        runSpecialCases(command->getArguments().split(reg).replaceInStrings("\"", ""), command->getArguments(),
-                        command->getSpecial());
-        return runProcessQueue();
-    }
-
-    m_pCurrentRunningProcess = new QProcess(this);
 
     QMap<QString, QString> replacements;
     replacements.insert(m_Variables);
@@ -360,16 +361,27 @@ void CMainWindow::runProcessQueue()
     replacements.insert(m_RuntimeVariables);
 
     auto commandStr = command->getCommand();
-    auto argumentsStr = command->getArguments();
+    //auto argumentsStr = command->getArguments();
+    QStringList arguments = command->getArguments().split(reg);
 
     for(const auto &key : replacements.keys())
     {
         commandStr = commandStr.replace(QRegularExpression(QRegularExpression::escape(key)), replacements[key]);
-        argumentsStr = argumentsStr.replace(QRegularExpression(QRegularExpression::escape(key)), replacements[key]);
+        //argumentsStr = argumentsStr.replace(QRegularExpression(QRegularExpression::escape(key)), replacements[key]); // bogus; breaks if replacements have spaces in them.
+        arguments = arguments.replaceInStrings(QRegularExpression(QRegularExpression::escape(key)), replacements[key]).replaceInStrings("//","/");
     }
 
+    if(command->getSpecial() != SPECIAL_EXEC)
+    {
+        runSpecialCases(arguments.replaceInStrings("\"", ""), command->getArguments(),
+                        command->getSpecial());
+        return runProcessQueue();
+    }
+
+    m_pCurrentRunningProcess = new QProcess(this);
+
     m_pCurrentRunningProcess->setProgram(commandStr);
-    m_pCurrentRunningProcess->setArguments(argumentsStr.split(reg).replaceInStrings("\"", ""));
+    m_pCurrentRunningProcess->setArguments(arguments.replaceInStrings("\"", ""));
     m_pCurrentRunningProcess->setProcessChannelMode(QProcess::MergedChannels);
     m_pCurrentRunningProcess->setWorkingDirectory(m_WorkDirectory);
 
@@ -395,7 +407,10 @@ void CMainWindow::runProcessQueue()
         {
 
             if(exitStatus == QProcess::CrashExit)
-                return runProcessQueue();
+                {
+                    m_QueueProcesses.clear();
+                    return runProcessQueue();
+                }
 
             continueButton->setDisabled(false);
 
@@ -439,7 +454,7 @@ int handleLuaException(lua_State* L, sol::optional<const std::exception&> maybe_
 
     // you must push 1 element onto the stack to be
     // transported through as the error object in Lua
-    // note that Lua -- and 99.5% of all Lua users and libraries -- expects a string
+    // note that Lua -- and 99.5% of all Lua users and libraSpecialries -- expects a string
     // so we push a single string (in our case, the description of the error)
     return sol::stack::push(L, description);
 }
@@ -451,6 +466,7 @@ void CMainWindow::runSpecialCases(const QStringList &arguments, const QString &r
         case CC_SPECIAL_SET_LOCAL_VARIABLE_DIRECTORY:
         case CC_SPECIAL_SET_LOCAL_VARIABLE_FULL_PATH_FILE:
         case CC_SPECIAL_SET_LOCAL_VARIABLE_FILENAME:
+            //TODO: what to do on badarg?
             if (arguments[0].isEmpty())
                 return;
 
@@ -492,18 +508,34 @@ void CMainWindow::runSpecialCases(const QStringList &arguments, const QString &r
                 return;
 
             if(!QFileInfo::exists(arguments[0]))
-                return;
+                {
+                    m_QueueProcesses.clear();
+                    return;
+                }
             {
+
+            /*
             auto path = arguments[0].split("/");
             path.pop_back();
             path.push_back(arguments[1]);
             auto joinedPath = path.join("/");
+    */
 
-            if(!QFileInfo(arguments[0]).isReadable() || (QFileInfo::exists(joinedPath) && QFileInfo(joinedPath).isWritable()))
-                return;
+            //TODO: Why this check is writeable?
+            if(!QFileInfo(arguments[0]).isReadable() || QFileInfo::exists(arguments[1]))
+                {
+                    m_QueueProcesses.clear();
+                    return;
+                }
 
-            QFile::rename(arguments[0], joinedPath);
-
+            //QFile::rename(arguments[0], joinedPath);
+            try {
+                std::filesystem::rename(arguments[0].toStdString(),arguments[1].toStdString());
+            } catch (std::filesystem::filesystem_error e) {
+                //print what happened.
+                pConsoleOutput->putPlainData(e.what());
+                m_QueueProcesses.clear();
+            }
             };
             return;
 
@@ -518,13 +550,18 @@ void CMainWindow::runSpecialCases(const QStringList &arguments, const QString &r
             {
 
                 if (!QFileInfo::exists(arguments[0]))
-                    return;
+                    {
+                        if (special == CC_SPECIAL_COPY_FILE)
+                            m_QueueProcesses.clear();
+                        return;
+                    }
 
                 auto pathFile = arguments[1].split("/");
                 if(pathFile.last().isEmpty())
                     pathFile.pop_back();
 
-                if (QFileInfo(pathFile.join("/")).isDir())
+                auto dirFile = QFileInfo(pathFile.join("/"));
+                if (dirFile.isDir())
                 {
                     auto splitFileName = arguments[0].split("/").last();
                     pathFile.push_back(splitFileName);
@@ -532,11 +569,20 @@ void CMainWindow::runSpecialCases(const QStringList &arguments, const QString &r
 
                 auto joinedPathFile = pathFile.join("/");
 
+/*
+                //FIXME: Fix this nonsense.
                 if (!QFileInfo(arguments[0]).isReadable() ||
-                    (QFileInfo::exists(joinedPathFile) && QFileInfo(joinedPathFile).isWritable()))
+                    !(QFileInfo::exists(joinedPathFile) && QFileInfo(joinedPathFile).isWritable()))
                     return;
-
-                QFile::copy(arguments[0], joinedPathFile);
+*/
+                //QFile::copy(arguments[0], joinedPathFile);
+                try {
+                    std::filesystem::copy_file(arguments[0].toStdString(),joinedPathFile.toStdString(),std::filesystem::copy_options::overwrite_existing);
+                } catch (std::filesystem::filesystem_error e) {
+                    //print what happened.
+                    pConsoleOutput->putPlainData(e.what());
+                    m_QueueProcesses.clear();
+                }
 
             }
             return;
@@ -544,7 +590,11 @@ void CMainWindow::runSpecialCases(const QStringList &arguments, const QString &r
         case CC_SPECIAL_CHANGE_DIRECTORY:
 
             if (!QFileInfo::exists(arguments[0]) || !QFileInfo(arguments[0]).isDir())
-                return;
+                {
+                    m_QueueProcesses.clear();
+                    return;
+                }
+
 
             m_WorkDirectory = arguments[0];
 
@@ -552,9 +602,19 @@ void CMainWindow::runSpecialCases(const QStringList &arguments, const QString &r
 
         case CC_SPECIAL_DELETE_FILE:
             if(!QFileInfo::exists(arguments[0]) || !QFileInfo(arguments[0]).isWritable())
-                return;
+                {
+                    m_QueueProcesses.clear();
+                    return;
+                }
 
-            QFile::remove(arguments[0]);
+            //QFile::remove(arguments[0]);
+            try {
+                std::filesystem::remove(arguments[0].toStdString());
+            } catch (std::filesystem::filesystem_error e) {
+                //print what happened.
+                pConsoleOutput->putPlainData(e.what());
+                m_QueueProcesses.clear();
+            }
             return;
 
         case CC_SPECIAL_SCRIPT:
@@ -1189,7 +1249,23 @@ void CMainWindow::ChangeConfigurations(const QString &s) {
 
 void CMainWindow::LoadConfigurationFromFile() {
 
-        auto configurationPath = QFileDialog::getOpenFileName(this, tr("Load Config"), "", CONFIG_SAVE_FILTER, nullptr, QFileDialog::DontUseNativeDialog);
+        QString configurationPath;
+        bool wcCSGO;
+    {
+        QWCFileDialog* fileDialog= new QWCFileDialog(this,tr("Load Config"),"",CONFIG_LOAD_FILTER,false);
+        int result = fileDialog->exec();
+        switch (result) {
+
+        case QDialog::Rejected:
+            return;
+        case QDialog::Accepted:
+            configurationPath = fileDialog->selectedFiles().value(0);
+            wcCSGO = fileDialog->wcCSGO;
+            break;
+        }
+        delete fileDialog;
+
+    }
         if (configurationPath.isEmpty()) {
             return;
         }
@@ -1201,12 +1277,11 @@ void CMainWindow::LoadConfigurationFromFile() {
         file.close();
 
         QJsonDocument jsonConfiguration;
-        QJsonObject jsonConfigObject;
 
         if(!configurationPath.endsWith(".json")) {
 
             if (CConfigHandler::IsBinaryWCConfig(fileContents)) {
-                jsonConfiguration = CConfigHandler::ConvertBinaryToJSON(fileContents);
+                jsonConfiguration = CConfigHandler::ConvertBinaryToJSON(fileContents,wcCSGO);
             } else {
                 jsonConfiguration = CConfigHandler::ConvertTextToJSON(
                         fileContents);
@@ -1221,6 +1296,48 @@ void CMainWindow::LoadConfigurationFromFile() {
 
         hasChanges = true;
 }
+
+void CMainWindow::ExportConfigurationToFile() {
+    QString configurationPath;
+    bool shouldOutputWC = false, wcBinary, wcCSGO;
+    {
+        QWCFileDialog* fileDialog= new QWCFileDialog(this,tr("Export Config"),"",CONFIG_SAVE_FILTER,true);
+        fileDialog->setAcceptMode(QFileDialog::AcceptSave);
+        int result = fileDialog->exec();
+        switch (result) {
+
+        case QDialog::Rejected:
+            return;
+        case QDialog::Accepted:
+            configurationPath = fileDialog->selectedFiles().value(0);
+            if(configurationPath.endsWith(".wc")) {
+                shouldOutputWC = true;
+            }
+            wcBinary = fileDialog->wcBinary;
+            wcCSGO = fileDialog->wcCSGO;
+            break;
+        }
+        delete fileDialog;
+
+    }
+    if (configurationPath.isEmpty()) {
+        return;
+    }
+    QJsonDocument jsonConfiguration{};
+    emitConfigurations(jsonConfiguration);
+    auto file = QFile(configurationPath);
+    file.open(QFile::WriteOnly);
+    if (shouldOutputWC) {
+        //pConsoleOutput->putPlainData("\n\n ERROR: WC export currently not implemented.");
+        std::unique_ptr<QByteArray> holder = CConfigHandler::ExportToWCConfig(jsonConfiguration,!wcBinary,wcCSGO);
+        file.write(*holder);
+    } else {
+        file.write(jsonConfiguration.toJson());
+    }
+    file.flush();
+    file.close();
+}
+
 
 void CMainWindow::CompileButtonPressed() {
 

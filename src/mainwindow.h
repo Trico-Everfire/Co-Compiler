@@ -60,6 +60,8 @@ private:
 
     void fillConfigurations(const QJsonDocument &doc);
 
+    void emitConfigurations(QJsonDocument &doc);
+
     void SaveConfig();
 
 public:
@@ -100,6 +102,8 @@ public:
     void ChangeConfigurations(const QString& s);
 
     void LoadConfigurationFromFile();
+
+    void ExportConfigurationToFile();
 
     void CompileButtonPressed();
 

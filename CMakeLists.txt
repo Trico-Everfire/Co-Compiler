@@ -15,6 +15,8 @@ set(SRC
         src/mainwindow.cpp
         src/mainwindow.h
 
+        src/widgets/qwcfiledialog.h
+        src/widgets/qwcfiledialog.cpp
         res/resource.qrc
         src/widgets/processlistwidgetitem.cpp
         src/widgets/processlistwidgetitem.h
